@@ -154,12 +154,12 @@
         mood: '<i class="fas fa-calendar-day"></i>',
         calendar: '<i class="fas fa-calendar-alt"></i>',
         decide: '<i class="fas fa-balance-scale"></i>',
-        stats: '<i class="fas fa-chart-bar"></i>',
+        'music-buddy': '<i class="fas fa-headphones"></i>',
         accounting: '<i class="fas fa-coins"></i>',
         'music-game': '<i class="fas fa-music"></i>'
     };
 
-    const defaultAppOrder = ['chat', 'mailbox', 'moyu', 'diary', 'fortune', 'mood', 'calendar', 'decide', 'stats', 'accounting', 'map', 'music-game'];
+    const defaultAppOrder = ['chat', 'mailbox', 'moyu', 'diary', 'fortune', 'mood', 'calendar', 'decide', 'music-buddy', 'accounting', 'map', 'music-game'];
     let appOrder = [...defaultAppOrder];
     let isEditMode = false;
 
@@ -789,22 +789,7 @@
      */
     function syncBgToChat(bgValue) {
         if (!bgSyncEnabled) return;
-        
-        // 保存到聊天设置的背景
-        if (window.settings) {
-            window.settings.chatBackground = bgValue;
-            // 触发保存
-            if (typeof window.throttledSaveData === 'function') {
-                window.throttledSaveData();
-            }
-        }
-        
-        // 直接更新聊天界面背景
-        const chatContainer = document.getElementById('chat-container');
-        if (chatContainer) {
-            chatContainer.style.background = bgValue;
-        }
-        
+        // 不再直接修改 chatContainer.style.background，各会话背景独立
         // 更新聊天设置中的背景显示
         const chatBgPreview = document.getElementById('chat-bg-preview');
         if (chatBgPreview) {
@@ -1172,7 +1157,7 @@
         if (!grid) return;
 
         grid.innerHTML = '';
-        const nameMap = { chat:'聊天', mailbox:'信封', moyu:'摸鱼', diary:'朝夕心记', fortune:'运势', mood:'心晴', calendar:'日历', decide:'抉择', stats:'统计', accounting:'记账', 'music-game':'音游' };
+        const nameMap = { chat:'会话', mailbox:'信封', moyu:'摸鱼', diary:'朝夕心记', fortune:'运势', mood:'心晴', calendar:'日历', decide:'抉择', 'music-buddy':'一起听', accounting:'记账', 'music-game':'音游' };
 
         Object.keys(defaultAppIcons).forEach(app => {
             const item = document.createElement('div');
@@ -1510,7 +1495,7 @@
                 // 隐藏聊天图标小红点
                 const chatBadge = document.getElementById('chat-badge');
                 if (chatBadge) chatBadge.style.display = 'none';
-                window.hideHomePage();
+                window.showChatListPage();
             },
             'mailbox': () => {
                 const modal = document.getElementById('envelope-modal');
@@ -2440,7 +2425,11 @@
 
     async function createObjectSessionAndSwitch() {
         if (typeof window.createNewSession === 'function') {
-            await window.createNewSession(true);
+            // 创建会话但不刷新页面
+            const newId = await window.createNewSession(false);
+            if (newId) {
+                await switchObjectSession(newId);
+            }
             return;
         }
         const newId = Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -2455,23 +2444,83 @@
         if (typeof sessionList !== 'undefined') sessionList = list;
         if (typeof localforage !== 'undefined') {
             await localforage.setItem(`${getAppPrefix()}sessionList`, list);
-            await localforage.setItem(`${getAppPrefix()}lastSessionId`, newId);
         }
-        window.location.hash = newId;
-        window.location.reload();
+        await switchObjectSession(newId);
     }
 
     async function switchObjectSession(sessionId) {
         if (!sessionId || sessionId === window.SESSION_ID) return;
+        // 保存当前会话数据
         try {
             if (typeof window.saveData === 'function') await window.saveData();
             else if (typeof window.throttledSaveData === 'function') window.throttledSaveData();
         } catch(e) {}
+        // 更新 SESSION_ID
+        window.SESSION_ID = sessionId;
+        if (typeof SESSION_ID !== 'undefined') SESSION_ID = sessionId;
         if (typeof localforage !== 'undefined') {
             try { await localforage.setItem(`${getAppPrefix()}lastSessionId`, sessionId); } catch(e) {}
         }
         window.location.hash = sessionId;
-        window.location.reload();
+        // SPA 式重新加载数据
+        await reloadSessionData();
+    }
+
+    async function reloadSessionData() {
+        try {
+            // 清除旧会话的待处理回复定时器
+            if (window._pendingReplyTimer) { clearTimeout(window._pendingReplyTimer); window._pendingReplyTimer = null; }
+            // 隐藏正在输入中指示器（全局只有一个DOM元素）
+            try { if (window._typingIndicatorAutoHideTimer) { clearTimeout(window._typingIndicatorAutoHideTimer); window._typingIndicatorAutoHideTimer = null; } } catch(e) {}
+            var _tiW = document.getElementById('typing-indicator-wrapper');
+            if (_tiW) _tiW.style.display = 'none';
+            // 递增回复代次 + 重置 generation，使旧会话的所有延迟回调全部失效
+            window._replyGeneration = (window._replyGeneration || 0) + 1;
+            // 清空输入框，防止旧会话的输入内容带到新会话
+            var _input = document.getElementById('message-input');
+            if (_input) { _input.value = ''; _input.style.height = '36px'; _input.style.overflow = 'hidden'; }
+            // 关闭可能打开的聊天推荐弹窗
+            var _recModal = document.getElementById('chat-song-rec-modal');
+            if (_recModal) _recModal.parentNode.removeChild(_recModal);
+            // 切换会话时清除旧背景，loadData 会应用新会话的背景
+            document.documentElement.style.removeProperty('--chat-bg-image');
+            document.body.classList.remove('with-background');
+
+            // 重新加载该会话的数据
+            if (typeof loadData === 'function') {
+                await loadData();
+            }
+            // 清除可能由主页同步留下的 chatContainer inline background
+            var chatContainer = document.getElementById('chat-container');
+            if (chatContainer) chatContainer.style.background = '';
+            // 重新渲染背景画廊（使用新会话的数据）
+            if (typeof renderBackgroundGallery === 'function') renderBackgroundGallery();
+            // 重置显示消息数
+            if (typeof displayedMessageCount !== 'undefined') {
+                displayedMessageCount = 20;
+            }
+            // 重新渲染消息
+            if (typeof renderMessages === 'function') {
+                renderMessages(false);
+            }
+            // 更新 UI
+            if (typeof window.updateUI === 'function') {
+                window.updateUI();
+            }
+            // 滚动到底部
+            if (typeof scrollToBottom === 'function') {
+                scrollToBottom();
+            } else {
+                const container = document.getElementById('chat-container');
+                if (container) container.scrollTop = container.scrollHeight;
+            }
+            // 重启定时器（使用新会话的设置，防止旧会话定时器仍触发）
+            if (typeof manageAutoSendTimer === 'function') manageAutoSendTimer();
+            if (typeof manageMoyuAutoGenerateTimer === 'function') manageMoyuAutoGenerateTimer();
+            if (typeof manageEnvelopeAutoSendTimer === 'function') manageEnvelopeAutoSendTimer();
+            if (typeof scheduleNextCheckin === 'function') scheduleNextCheckin();
+            if (typeof manageChatSongRecTimer === 'function') manageChatSongRecTimer();
+        } catch(e) { console.error('切换会话数据失败:', e); }
     }
 
     // 会话切换弹窗
@@ -2573,7 +2622,218 @@
                 return false;
             };
         }
+        // 聊天列表返回按钮
+        const chatListBackBtn = document.getElementById('chat-list-back-btn');
+        if (chatListBackBtn) {
+            chatListBackBtn.addEventListener('click', () => {
+                window.hideChatListPage();
+                window.showHomePage();
+            });
+        }
+        // 聊天列表添加联系人按钮 → 弹窗
+        const chatListAddBtn = document.getElementById('chat-list-add-btn');
+        if (chatListAddBtn) {
+            chatListAddBtn.addEventListener('click', () => {
+                if (typeof window.openAddContactModal === 'function') {
+                    window.openAddContactModal();
+                }
+            });
+        }
+        // 聊天头部添加联系人按钮 → 弹窗
+        const addContactBtn = document.getElementById('chat-add-contact-btn');
+        if (addContactBtn) {
+            addContactBtn.addEventListener('click', () => {
+                if (typeof window.openAddContactModal === 'function') {
+                    window.openAddContactModal();
+                }
+            });
+        }
+        // 添加联系人弹窗事件
+        const addContactCancelBtn = document.getElementById('add-contact-cancel-btn');
+        if (addContactCancelBtn) {
+            addContactCancelBtn.addEventListener('click', () => window.closeAddContactModal());
+        }
+        const addContactConfirmBtn = document.getElementById('add-contact-confirm-btn');
+        if (addContactConfirmBtn) {
+            addContactConfirmBtn.addEventListener('click', () => window.confirmAddContact());
+        }
+        const addContactAvatarPreview = document.getElementById('add-contact-avatar-preview');
+        const addContactAvatarFile = document.getElementById('add-contact-avatar-file');
+        if (addContactAvatarPreview && addContactAvatarFile) {
+            addContactAvatarPreview.addEventListener('click', () => addContactAvatarFile.click());
+            addContactAvatarFile.addEventListener('change', (e) => {
+                const f = e.target.files[0];
+                if (!f) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    addContactAvatarPreview.innerHTML = '<img src="' + reader.result + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">';
+                    addContactAvatarPreview.dataset.avatar = reader.result;
+                };
+                reader.readAsDataURL(f);
+                e.target.value = '';
+            });
+        }
     });
+
+    // ========== 聊天列表 ==========
+    window.showChatListPage = async function() {
+        const listPage = document.getElementById('chat-list-page');
+        if (!listPage) return;
+        const homeContainer = document.getElementById('home-container');
+        if (homeContainer) homeContainer.style.display = 'none';
+        document.body.classList.remove('home-active');
+        listPage.style.display = 'flex';
+        await window.renderChatList();
+    };
+
+    window.hideChatListPage = function() {
+        const listPage = document.getElementById('chat-list-page');
+        if (listPage) listPage.style.display = 'none';
+    };
+
+    window.renderChatList = async function() {
+        const container = document.getElementById('chat-list-items');
+        if (!container) return;
+        const sessions = await getLatestSessionList();
+        if (!sessions.length) {
+            container.innerHTML = '<div class="chat-list-empty"><i class="fas fa-comments"></i><div>还没有联系人</div><div style="font-size:12px;margin-top:4px;">点击右上角添加</div></div>';
+            return;
+        }
+        const items = await Promise.all(sessions.map(async (s) => {
+            let displayName = s.name || '未命名';
+            let avatarData = null;
+            try {
+                const stored = await localforage.getItem(`${getAppPrefix()}${s.id}_chatSettings`);
+                if (stored && stored.partnerName) displayName = stored.partnerName;
+            } catch(e) {}
+            try {
+                avatarData = await localforage.getItem(`${getAppPrefix()}${s.id}_partnerAvatar`);
+            } catch(e) {}
+            return { ...s, displayName, avatarData };
+        }));
+        items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        container.innerHTML = items.map(s => {
+            const avatarHTML = s.avatarData
+                ? '<img src="' + s.avatarData + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">'
+                : (s.displayName || '?').charAt(0);
+            return '<div class="chat-list-item" data-id="' + s.id + '">' +
+                '<div class="chat-list-item-avatar">' + avatarHTML + '</div>' +
+                '<div class="chat-list-item-info">' +
+                '<div class="chat-list-item-name">' + (s.displayName || '未命名') + '</div>' +
+                '<div class="chat-list-item-sub">' + new Date(s.createdAt || Date.now()).toLocaleString('zh-CN', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + '</div>' +
+                '</div>' +
+                '<button class="chat-list-item-delete" data-id="' + s.id + '" title="删除"><i class="fas fa-trash-alt"></i></button>' +
+                '</div>';
+        }).join('');
+        container.querySelectorAll('.chat-list-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.chat-list-item-delete')) return;
+                window.enterChatWithSession(item.dataset.id);
+            });
+        });
+        container.querySelectorAll('.chat-list-item-delete').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm('确定删除此联系人？聊天记录将永久丢失。')) return;
+                await window.deleteChatSession(btn.dataset.id);
+            });
+        });
+    };
+
+    window.enterChatWithSession = async function(sessionId) {
+        if (!sessionId) return;
+        if (sessionId === window.SESSION_ID) {
+            // 已经是当前会话，直接进入聊天
+            window.hideChatListPage();
+            window.hideHomePage();
+            return;
+        }
+        // SPA 式切换，不刷新页面
+        await switchObjectSession(sessionId);
+        // 直接进入聊天
+        window.hideChatListPage();
+        window.hideHomePage();
+    };
+
+    window.deleteChatSession = async function(sessionId) {
+        const sessions = await getLatestSessionList();
+        const newList = sessions.filter(s => s.id !== sessionId);
+        window.sessionList = newList;
+        if (typeof sessionList !== 'undefined') sessionList = newList;
+        try {
+            await localforage.setItem(`${getAppPrefix()}sessionList`, newList);
+            const keysToDelete = [
+                `${getAppPrefix()}${sessionId}_chatMessages`,
+                `${getAppPrefix()}${sessionId}_chatSettings`,
+                `${getAppPrefix()}${sessionId}_partnerAvatar`,
+                `${getAppPrefix()}${sessionId}_myAvatar`,
+                `${getAppPrefix()}${sessionId}_partnerAvatarFrame`,
+                `${getAppPrefix()}${sessionId}_myAvatarFrame`,
+            ];
+            await Promise.all(keysToDelete.map(k => localforage.removeItem(k).catch(() => {})));
+        } catch(e) { console.error('删除失败:', e); }
+        if (sessionId === window.SESSION_ID) {
+            if (newList.length > 0) {
+                await switchObjectSession(newList[0].id);
+            } else {
+                await createObjectSessionAndSwitch();
+            }
+        } else {
+            await window.renderChatList();
+        }
+    };
+
+    // ========== 添加联系人弹窗 ==========
+    window.openAddContactModal = function() {
+        const modal = document.getElementById('add-contact-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        const preview = document.getElementById('add-contact-avatar-preview');
+        if (preview) {
+            preview.innerHTML = '<i class="fas fa-camera" style="font-size:20px;opacity:0.6;"></i>';
+            delete preview.dataset.avatar;
+        }
+        const nameInput = document.getElementById('add-contact-name-input');
+        if (nameInput) nameInput.value = '';
+    };
+
+    window.closeAddContactModal = function() {
+        const modal = document.getElementById('add-contact-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    window.confirmAddContact = async function() {
+        const nameInput = document.getElementById('add-contact-name-input');
+        const preview = document.getElementById('add-contact-avatar-preview');
+        const name = nameInput ? nameInput.value.trim() : '';
+        if (!name) { alert('请输入昵称'); return; }
+        const avatar = preview ? preview.dataset.avatar : null;
+        window.closeAddContactModal();
+        // SPA 式创建新会话并切换
+        await createObjectSessionAndSwitch();
+        // 设置昵称和头像到新会话
+        try {
+            const newSessionId = window.SESSION_ID;
+            const storedSettings = (await localforage.getItem(`${getAppPrefix()}${newSessionId}_chatSettings`)) || {};
+            storedSettings.partnerName = name;
+            await localforage.setItem(`${getAppPrefix()}${newSessionId}_chatSettings`, storedSettings);
+            if (avatar) {
+                await localforage.setItem(`${getAppPrefix()}${newSessionId}_partnerAvatar`, avatar);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(`${getAppPrefix()}${newSessionId}_partnerAvatar`, avatar);
+                }
+            }
+            // 更新全局 settings 并刷新 UI
+            if (typeof settings !== 'undefined') {
+                Object.assign(settings, storedSettings);
+            }
+            if (typeof window.updateUI === 'function') window.updateUI();
+            if (typeof renderMessages === 'function') renderMessages(false);
+        } catch(e) { console.error('设置联系人数据失败:', e); }
+        // 隐藏列表，进入聊天
+        window.hideChatListPage();
+        window.hideHomePage();
+    };
 
     // 从聊天设置同步数据到 Home 页（供 core.js 调用）
     // 注意：头像和昵称的同步已在 loadSavedSettings 中处理，这里只处理其他数据
