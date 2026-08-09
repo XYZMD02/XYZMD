@@ -1,0 +1,242 @@
+<script>
+window.onerror=function(m,s,l,c,e){console.error('JS Error:',m,'at line',l);return true};
+
+// 全局未捕获 Promise 异常处理，防止静默白屏
+window.addEventListener('unhandledrejection',function(e){
+  console.error('Unhandled rejection:',e.reason);
+  // 防抖：同一错误在 1 秒内只处理一次，避免高频报错导致页面被反复重渲染、按钮失效
+  var now=Date.now();
+  if(window._lastUnhandledTs&&(now-window._lastUnhandledTs)<1000){
+    e.preventDefault&&e.preventDefault();
+    return;
+  }
+  window._lastUnhandledTs=now;
+  // 隐藏早期加载动画
+  try{var el=document.getElementById('early-loading');if(el)el.style.display='none';}catch(e3){}
+  // 确保 phone 容器可见
+  var phone=document.querySelector('.phone');
+  if(phone && phone.style.opacity==='0'){
+    phone.style.display='flex';
+    phone.style.opacity='1';
+  }
+  var ann=document.getElementById('announcement-screen');
+  if(ann && ann.style.display!=='none'){
+    ann.style.opacity='0';
+    setTimeout(function(){ann.style.display='none';ann.style.pointerEvents='none';},500);
+  }
+  try{showPg('pg-list');renderChatList();}catch(e2){}
+});
+
+// DOM 加载完成后确保 phone 最终可见（兜底机制）
+document.addEventListener('DOMContentLoaded',function(){
+  setTimeout(function(){
+    var phone=document.querySelector('.phone');
+    var ann=document.getElementById('announcement-screen');
+    // 如果 5 秒后 phone 仍然不可见，强制显示
+    setTimeout(function(){
+      if(phone && (phone.style.opacity==='0' || phone.style.display==='none')){
+        console.warn('Force showing phone after 5s timeout');
+        try{var el=document.getElementById('early-loading');if(el)el.style.display='none';}catch(e3){}
+        phone.style.display='flex';
+        phone.style.opacity='1';
+        if(ann){ann.style.display='none';ann.style.pointerEvents='none';}
+        try{showPg('pg-list');renderChatList();}catch(e2){}
+      }
+    },5000);
+    // 2 秒后也检查一次（兜底更快）
+    setTimeout(function(){
+      var elEarly=document.getElementById('early-loading');
+      if(elEarly&&elEarly.style.display!=='none')return;
+      if(phone && (phone.style.opacity==='0' || phone.style.display==='none')){
+        console.warn('Force showing phone after 2s quick check');
+        phone.style.display='flex';
+        phone.style.opacity='1';
+        if(ann){ann.style.display='none';ann.style.pointerEvents='none';}
+        try{showPg('pg-list');renderChatList();}catch(e2){}
+      }
+    },2000);
+  },0);
+});
+
+// 全局错误处理：确保发生 JS 错误时 phone 仍然可见
+window.addEventListener('error',function(e){
+  var phone=document.querySelector('.phone');
+  if(phone && (phone.style.opacity==='0' || phone.style.display==='none')){
+    console.warn('Global error caught, forcing phone display');
+    phone.style.display='flex';
+    phone.style.opacity='1';
+    var ann=document.getElementById('announcement-screen');
+    if(ann){ann.style.display='none';ann.style.pointerEvents='none';}
+    try{showPg('pg-list');renderChatList();}catch(e2){}
+  }
+});
+
+var $=function(id){return document.getElementById(id)};
+var bindEvt=function(id,evt,fn){var el=$(id);if(el)el.addEventListener(evt,fn);};
+var safeAddEvent=function(id,evt,fn,opts){var el=$(id);if(el){if(opts)el.addEventListener(evt,fn,opts);else el.addEventListener(evt,fn);}return !!el;};
+var chatBgCache={};
+var SELF='user',OTHER='partner',LC='ml2_c',LP='ml2_p',LM='ml2_m_',LD='ml2_d_',LL='ml2_letters',LMOM='ml2_moments',LLIKE='ml2_like_';
+// 全局防误触：在touchend时用changedTouches计算总移动距离（而非touchmove中间值），
+// 避免高灵敏度触屏（如荣耀100）在点击时产生微小touchmove导致误判为滑动
+// 使用捕获阶段确保touchend在按钮的touchend之前触发
+var _tsX=0,_tsY=0,_tsM=false;
+document.addEventListener('touchstart',function(e){_tsX=e.touches[0].clientX;_tsY=e.touches[0].clientY;_tsM=false},{passive:true,capture:true});
+function isSwipe(){return _tsM;}
+document.addEventListener('touchend',function(e){
+  var dx=e.changedTouches[0].clientX-_tsX;
+  var dy=e.changedTouches[0].clientY-_tsY;
+  _tsM=(Math.abs(dx)>20||Math.abs(dy)>20);
+  if(_tsM){
+    e.stopPropagation();
+  }
+},{passive:false,capture:true});
+document.addEventListener('click',function(e){
+  if(isSwipe()){
+    _tsM=false;
+    var tag=e.target.tagName;
+    var hasOnclickAttr=!!e.target.closest('[onclick]');
+    var hasJSOnclick=false;
+    var el=e.target;
+    for(var d=0;d<4&&el;d++){if(el.onclick){hasJSOnclick=true;break;}el=el.parentElement;}
+    var isInteractive=tag==='BUTTON'||tag==='A'||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||e.target.closest('button')||e.target.closest('a')||e.target.closest('.mo-action')||e.target.closest('[data-action]')||hasOnclickAttr||hasJSOnclick;
+    if(!isInteractive){
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }
+},true);
+
+function setupKeyboardFix(){
+  var isMobile=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  if(!isMobile)return;
+  
+  var phone=document.querySelector('.phone');
+  var msgbox=document.getElementById('msgbox');
+  var inputWrap=document.querySelector('.input-wrap');
+  
+  var originalHeight=window.innerHeight;
+  var vvHeight=window.innerHeight;
+  
+  if(window.visualViewport){
+    var _vvResizeTimer=null;
+    window.visualViewport.addEventListener('resize',function(){
+      var newHeight=window.visualViewport.height;
+      var heightDiff=originalHeight-newHeight;
+      
+      if(heightDiff>50){
+        if(_vvResizeTimer)clearTimeout(_vvResizeTimer);
+        _vvResizeTimer=setTimeout(function(){
+          if(msgbox)msgbox.scrollTop=msgbox.scrollHeight;
+        },100);
+      }
+    });
+    
+    // 移除scroll事件监听 - 每次滚动都强制scrollTop会导致严重卡顿
+    // 仅在键盘弹出时通过resize事件处理滚动
+  }
+  
+  window.addEventListener('resize',function(){
+    var newHeight=window.innerHeight;
+    var heightDiff=originalHeight-newHeight;
+    
+    if(heightDiff>50){
+      if(msgbox){
+        setTimeout(function(){msgbox.scrollTop=msgbox.scrollHeight},100);
+      }
+    }
+  });
+  
+  document.addEventListener('focusin',function(e){
+    if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'){
+      setTimeout(function(){
+        if(msgbox){
+          msgbox.scrollTop=msgbox.scrollHeight;
+        }
+      },300);
+    }
+  });
+}
+setupKeyboardFix();
+
+// ---------- Card Data ----------
+var TAROT_CARDS=[{"name": "愚者", "en": "The Fool", "kw": "新的开始·冒险·天真", "desc": "一段全新的旅程即将展开，你站在未知的起点，内心充满好奇与冲动。不必过度规划，信任直觉迈出第一步。", "rev_kw": "鲁莽·不成熟·逃避", "rev_desc": "你可能因为冲动而忽略了重要的细节，或者在刻意回避某些必须面对的问题。"}, {"name": "魔术师", "en": "The Magician", "kw": "创造力·能力·专注", "desc": "一切资源都已就位，你有足够的能力将想法变为现实。集中注意力，这个世界会回应你的意志。", "rev_kw": "才能浪费·欺骗·缺乏计划", "rev_desc": "空有天赋却没有付诸行动，或被表象迷惑而未能辨别真伪。"}, {"name": "女祭司", "en": "The High Priestess", "kw": "直觉·潜意识·神秘", "desc": "答案不在外界，而在你的内心深处。静下心来倾听内在的声音，直觉远比表面证据更可靠。", "rev_kw": "忽视直觉·表面信息·情绪混乱", "rev_desc": "过于依赖外部信息而忽略了内心的真实感受，导致方向迷失。"}, {"name": "女皇", "en": "The Empress", "kw": "丰饶·母性·感官享受", "desc": "万物生长、丰盛富足，这是一个享受生活和创造美好的阶段。亲近自然，滋养身心。", "rev_kw": "匮乏·依赖·停滞", "rev_desc": "资源或情感上的枯竭，也许太依赖别人而忽略了自己的力量。"}, {"name": "皇帝", "en": "The Emperor", "kw": "权威·秩序·控制", "desc": "建立结构与规则的时候到了。你需要用理性与纪律掌控局面，承担起领导的责任。", "rev_kw": "专横·混乱·缺乏自律", "rev_desc": "要么过于强势压制他人，要么因为缺乏秩序而导致失控。"}, {"name": "教皇", "en": "The Hierophant", "kw": "传统·信仰·教导", "desc": "遵循传统智慧，从既有的系统与经验中获取指导。这也可能意味着一段正式的关系或仪式。", "rev_kw": "叛逆·教条·虚伪", "rev_desc": "对传统盲目接受或全盘否定，缺乏真正的独立思考。"}, {"name": "恋人", "en": "The Lovers", "kw": "选择·爱情·结合", "desc": "一个重要的选择摆在你面前，它不仅关于爱情，也关于你的价值观和人生方向。听从内心。", "rev_kw": "错误选择·分离·不和谐", "rev_desc": "面临抉择的困难或关系中的裂痕，需要重新审视自己的真实需求。"}, {"name": "战车", "en": "The Chariot", "kw": "胜利·意志力·前进", "desc": "通过强大的意志力克服障碍，勇往直前。你的决心将带你冲破一切阻碍，抵达目标。", "rev_kw": "失控·挫折·方向错误", "rev_desc": "方向可能搞错了，或者急于求成导致了失控与碰撞。"}, {"name": "力量", "en": "Strength", "kw": "勇气·耐心·内在力量", "desc": "真正的力量来自于温柔与耐心。以柔克刚，用内在的坚定驯服外在的挑战。", "rev_kw": "软弱·失控·缺乏自信", "rev_desc": "自我怀疑正在削弱你的力量，需要重新找回内核的稳定。"}, {"name": "隐士", "en": "The Hermit", "kw": "内省·孤独·指引", "desc": "暂时退出喧嚣，独处并获得深层的洞见。你的内在之光会照亮前路。", "rev_kw": "孤僻·逃避·拒绝建议", "rev_desc": "可能陷入了过度的自我封闭，或者拒绝接受任何帮助。"}, {"name": "命运之轮", "en": "Wheel of Fortune", "kw": "转变·机遇·命运", "desc": "命运之轮正在转动，变化即将到来。无论是好是坏，接受它，顺应潮流的走向。", "rev_kw": "厄运·抵抗变化·失控", "rev_desc": "对不可阻挡的变化感到抗拒，导致被动与挫折。"}, {"name": "正义", "en": "Justice", "kw": "公平·真相·因果", "desc": "一切行为都会有相应的结果。理性决策、诚实面对自己，公正的天平总会倾向正确的一方。", "rev_kw": "不公·偏见·逃避责任", "rev_desc": "可能存在不公平的对待，或者你在逃避自己应负的责任。"}, {"name": "倒吊人", "en": "The Hanged Man", "kw": "牺牲·换个视角·等待", "desc": "以不同的角度看待世界。有时候停下来、放弃控制，反而能获得更深的理解。", "rev_kw": "无意义的牺牲·固执·停滞", "rev_desc": "你的牺牲或许并没有价值，只是在原地僵持而已。"}, {"name": "死神", "en": "Death", "kw": "结束·重生·彻底的改变", "desc": "一个阶段已彻底终结，为新生腾出空间。这是自然循环的一部分，不要恐惧它的到来。", "rev_kw": "抗拒改变·停滞·恐惧", "rev_desc": "死死抓住已经该放手的东西，导致无法迎来新的开始。"}, {"name": "节制", "en": "Temperance", "kw": "平衡·调和·耐心", "desc": "寻找中点，融合对立面。事缓则圆，循序渐进比激进冲突更有力量。", "rev_kw": "失衡·过度·缺乏协调", "rev_desc": "生活某个方面失去了平衡，需要重新调整重心。"}, {"name": "恶魔", "en": "The Devil", "kw": "欲望·束缚·物质主义", "desc": "某种模式或关系正在束缚着你。认清这些枷锁往往是自己带上的，而钥匙就在手中。", "rev_kw": "解脱·觉醒·摆脱束缚", "rev_desc": "正在意识到自己被困，并鼓起勇气挣脱它。"}, {"name": "高塔", "en": "The Tower", "kw": "颠覆·冲击·觉醒", "desc": "旧有的结构以激烈的方式崩塌。虽然过程痛苦，但摧毁虚假的才能重建真实的。", "rev_kw": "逃避灾难·延缓改变·恐惧", "rev_desc": "拼命维持即将倒塌的现状，只是推迟了不可避免的改变。"}, {"name": "星星", "en": "The Star", "kw": "希望·疗愈·灵感", "desc": "风雨过后，宁静与希望降临。你的内心被治愈和照亮，信任宇宙给你的指引。", "rev_kw": "绝望·缺乏信心·迷失", "rev_desc": "暂时看不到希望，需要重新连接自己的内核。"}, {"name": "月亮", "en": "The Moon", "kw": "幻觉·恐惧·潜意识", "desc": "道路模糊不清，你被潜意识的暗流所环绕。不要被表象迷惑，认清内在的恐惧。", "rev_kw": "恐惧消散·真相浮现·清醒", "rev_desc": "迷雾正在散开，真相终于浮出水面。"}, {"name": "太阳", "en": "The Sun", "kw": "成功·活力·快乐", "desc": "光明、温暖与成就包围着你。现在是享受生命、尽情发光的最好时刻。", "rev_kw": "暂时阴霾·缺乏活力·延迟", "rev_desc": "快乐可能暂时被遮挡，但阳光总会破云而出。"}, {"name": "审判", "en": "Judgment", "kw": "觉醒·召唤·评估", "desc": "内在的声音正在召唤你醒来。这是一个重新评估人生方向、做出重要决定的时刻。", "rev_kw": "自我怀疑·拒绝召唤·遗憾", "rev_desc": "因自我怀疑而拒绝命运的召唤，忽视了内在的觉醒声音。"}, {"name": "世界", "en": "The World", "kw": "完成·整合·圆满", "desc": "一个重要的循环已经完成。你感到圆满、充实，与世界融为一体。", "rev_kw": "未完成·拖延·不完整", "rev_desc": "距离完成还差最后一步，或者你还没做好准备迎接终结。"}, {"name": "权杖王牌", "en": "Ace of Wands", "kw": "灵感·新开始·潜力", "desc": "一股强烈的创作火苗正在萌发，一个新项目或新激情即将诞生。", "rev_kw": "延迟·缺乏方向·流产", "rev_desc": "灵感被压抑或计划未能如期开展。"}, {"name": "权杖二", "en": "Two of Wands", "kw": "规划·未来·决策", "desc": "站在高处审视全局，为未来制定蓝图并做出选择。", "rev_kw": "犹豫·规划不当·受限", "rev_desc": "在规划上犹豫不决，或者视野过于狭小。"}, {"name": "权杖三", "en": "Three of Wands", "kw": "扩张·远见·探索", "desc": "计划已经实施，远处的船只即将靠岸，你的远见正在变成现实。", "rev_kw": "挫折·延误·视野狭窄", "rev_desc": "进展受阻，或因缺乏远见而导致回报不如预期。"}, {"name": "权杖四", "en": "Four of Wands", "kw": "庆祝·稳定·家园", "desc": "欢庆的时刻，安稳的根基正在建立，可能是家庭或团队的和谐。", "rev_kw": "不安·冲突·不稳定", "rev_desc": "家中或团队内部存在不和谐，缺乏归属感。"}, {"name": "权杖五", "en": "Five of Wands", "kw": "竞争·冲突·挑战", "desc": "激烈的竞争或意见分歧。这是成长的过程，试着从中学习并找到自己的一席之地。", "rev_kw": "避免冲突·达成共识·退出", "rev_desc": "冲突得到缓解或你选择了退出无意义的争斗。"}, {"name": "权杖六", "en": "Six of Wands", "kw": "胜利·认可·进步", "desc": "凯旋归来，你的努力终于得到了公众的认可和赞赏。", "rev_kw": "失败·缺乏认可·自大", "rev_desc": "期望的认可没有到来，或因为自大导致了失败。"}, {"name": "权杖七", "en": "Seven of Wands", "kw": "坚持·防守·勇气", "desc": "你必须坚守阵地，捍卫你的信仰和成果，即使面对围攻。", "rev_kw": "屈服·放弃·被压垮", "rev_desc": "感到力不从心，防线即将崩溃，需要寻求支援。"}, {"name": "权杖八", "en": "Eight of Wands", "kw": "速度·行动·消息", "desc": "停滞已经结束，事情将飞速发展，好消息在飞速传来的路上。", "rev_kw": "延误·混乱·失去动力", "rev_desc": "事情的进展受阻，或者因为过快导致了混乱。"}, {"name": "权杖九", "en": "Nine of Wands", "kw": "坚韧·最后的防线·警惕", "desc": "即使精疲力尽，你也必须守住最后的堡垒。你已经比想象中更坚强。", "rev_kw": "崩溃·放弃·固执", "rev_desc": "身心俱疲，防线即将崩溃，或者选择了固执的坚持但毫无意义。"}, {"name": "权杖十", "en": "Ten of Wands", "kw": "负担·责任·压力", "desc": "你扛着过重的负担在行走，这种高压状态无法持久，需要学会分配或放下。", "rev_kw": "释放·不再负担·逃避", "rev_desc": "终于放下了沉重的包袱，或者选择了逃避责任。"}, {"name": "权杖侍从", "en": "Page of Wands", "kw": "探索·热情·好消息", "desc": "一个充满好奇心和热情的新发现，或一个激励人心的消息。", "rev_kw": "坏消息·缺乏动力·幼稚", "rev_desc": "因为准备不足或过于幼稚而导致失败。"}, {"name": "权杖骑士", "en": "Knight of Wands", "kw": "冲动·冒险·激情", "desc": "充满热情地冲向目标，行动力爆棚，但别忘了看看脚下的路。", "rev_kw": "急躁·鲁莽·三分钟热度", "rev_desc": "热情来得快去得也快，或者因为过于鲁莽而导致失败。"}, {"name": "权杖王后", "en": "Queen of Wands", "kw": "自信·魅力·独立", "desc": "充满活力的领导者，热情而慷慨，散发着不可抗拒的魅力。", "rev_kw": "嫉妒·专横·缺乏自信", "rev_desc": "自负或因为缺乏安全感而试图控制一切。"}, {"name": "权杖国王", "en": "King of Wands", "kw": "领导力·远见·企业家精神", "desc": "天生的领导者，具有远见卓识和强大的执行力。", "rev_kw": "专横·冲动·缺乏责任感", "rev_desc": "专横霸道导致众叛亲离，或者空有野心却不脚踏实地。"}, {"name": "圣杯王牌", "en": "Ace of Cups", "kw": "爱·新感情·喜悦", "desc": "情感源泉正在涌出，新的爱或深厚的友谊即将填满你的内心。", "rev_kw": "情感枯竭·空虚·拒绝爱", "rev_desc": "内心感到空虚，或者在排斥新的感情流入。"}, {"name": "圣杯二", "en": "Two of Cups", "kw": "伙伴关系·吸引·和谐", "desc": "一段平等且充满吸引力的关系正在加深，是爱情或深度友谊的标志。", "rev_kw": "分手·不平衡·争执", "rev_desc": "关系出现裂痕，需要重新寻找平衡点。"}, {"name": "圣杯三", "en": "Three of Cups", "kw": "友谊·庆祝·分享", "desc": "与朋友们欢聚一堂，分享快乐和情感支持。", "rev_kw": "过度享乐·闲言碎语·孤独", "rev_desc": "社交过度导致疲惫，或在人群中感到格外孤独。"}, {"name": "圣杯四", "en": "Four of Cups", "kw": "厌倦·沉思·不满", "desc": "你对眼前的三个杯子视而不见，只关注那些尚未拥有的东西。", "rev_kw": "新动力·抓住机会·清醒", "rev_desc": "突然醒悟，开始抓住眼前的机会。"}, {"name": "圣杯五", "en": "Five of Cups", "kw": "悲伤·失落·遗憾", "desc": "为你倒下的三个杯子哭泣，而忘记了背后还有两个是完整的。", "rev_kw": "接受·振作·向前看", "rev_desc": "开始走出悲伤，重新关注生活中还美好的部分。"}, {"name": "圣杯六", "en": "Six of Cups", "kw": "怀旧·纯真·回忆", "desc": "美好的回忆或天真烂漫的时光重现，可能是一段旧情谊的回归。", "rev_kw": "沉溺过去·无法长大·逃避", "rev_desc": "陷在过去无法自拔，无法面对现实生活。"}, {"name": "圣杯七", "en": "Seven of Cups", "kw": "幻想·选择·欲望", "desc": "面对众多选择感到眼花缭乱，注意区分幻想与现实。", "rev_kw": "清醒·目标明确·现实", "rev_desc": "冲破了幻想的迷雾，终于看到了真实的目标。"}, {"name": "圣杯八", "en": "Eight of Cups", "kw": "离开·追寻·更高的意义", "desc": "尽管一切看似完美，你却决定离开去寻找更深层的精神满足。", "rev_kw": "逃避·犹豫·回程", "rev_desc": "选择了逃避或因为害怕而不敢离开舒适圈。"}, {"name": "圣杯九", "en": "Nine of Cups", "kw": "愿望成真·满足·舒适", "desc": "愿望终于实现，你感到身心满足，一切尽在掌握。", "rev_kw": "贪婪·不满·物质主义", "rev_desc": "实现了物质上的满足但内心依然空虚，或过分炫耀。"}, {"name": "圣杯十", "en": "Ten of Cups", "kw": "幸福·家庭·圆满", "desc": "最完美的幸福，家庭和睦，内心充满了爱与安宁。", "rev_kw": "家庭不和·破碎·破裂", "rev_desc": "理想的家庭生活可能只是表面的假象，或存在深层的矛盾。"}, {"name": "圣杯侍从", "en": "Page of Cups", "kw": "创造力·直觉·好消息", "desc": "一个充满想象力的灵感来了，或者一段关于感情的好消息。", "rev_kw": "情绪化·坏消息·幼稚", "rev_desc": "过于敏感和多愁善感，或者收到了令人失望的情感消息。"}, {"name": "圣杯骑士", "en": "Knight of Cups", "kw": "浪漫·追求·理想主义", "desc": "白马王子，带着鲜花和甜蜜的话语向你走来。他代表了浪漫的追求。", "rev_kw": "欺骗·空谈·不切实际", "rev_desc": "表面浪漫但缺乏行动力，或者只是花言巧语。"}, {"name": "圣杯王后", "en": "Queen of Cups", "kw": "同理心·直觉·关怀", "desc": "极强的共情能力和直觉，她会无条件地给予你温暖的关怀。", "rev_kw": "情绪失控·依赖·偏执", "rev_desc": "情感上过于依赖或情绪极度不稳定。"}, {"name": "圣杯国王", "en": "King of Cups", "kw": "成熟·宽容·情绪稳定", "desc": "情感的掌控者，宽容、沉稳，知道如何用成熟的方式去爱。", "rev_kw": "情绪勒索·冷漠·失控", "rev_desc": "为了控制他人而情感勒索，或者过于冷酷无情。"}, {"name": "宝剑王牌", "en": "Ace of Swords", "kw": "清晰·突破·真理", "desc": "一道劈开迷雾的闪电，真理和清晰的思维即将降临。", "rev_kw": "混乱·错误决策·模糊", "rev_desc": "思绪混乱如麻，无法做出正确的判断。"}, {"name": "宝剑二", "en": "Two of Swords", "kw": "僵局·逃避·防御", "desc": "闭着眼睛蒙蔽自己，拒绝做出选择。僵局需要打破。", "rev_kw": "释放真相·做出决定·打破僵局", "rev_desc": "终于鼓起勇气面对现实并做出决定。"}, {"name": "宝剑三", "en": "Three of Swords", "kw": "心碎·背叛·悲伤", "desc": "三把剑刺穿心脏，代表着不可回避的痛苦与真相大白。", "rev_kw": "疗愈·释怀·走出阴影", "rev_desc": "伤口正在愈合，你已慢慢学会释怀。"}, {"name": "宝剑四", "en": "Four of Swords", "kw": "休息·恢复·沉思", "desc": "战斗之后的休整。躺下来，彻底放松，恢复体力和精神。", "rev_kw": "失眠·焦虑·被迫休息", "rev_desc": "虽然休息了但毫无放松，反而更加焦躁不安。"}, {"name": "宝剑五", "en": "Five of Swords", "kw": "胜利的代价·冲突·空虚", "desc": "你赢了，但是代价惨重。这种以伤害他人为代价的胜利真的值得吗？", "rev_kw": "和解·放下·妥协", "rev_desc": "选择了退让或寻求和解，避免两败俱伤。"}, {"name": "宝剑六", "en": "Six of Swords", "kw": "过渡·前行·疗愈", "desc": "带着沉重的行李离开困境，向着平静的水面驶去。", "rev_kw": "被困·无法前进·拒绝帮助", "rev_desc": "困在原地，水底下暗流涌动，无法脱身。"}, {"name": "宝剑七", "en": "Seven of Swords", "kw": "策略·欺骗·智取", "desc": "通过巧妙的计谋拿走属于你的东西，但注意不要因为侥幸而翻车。", "rev_kw": "被识破·悔改·归还", "rev_desc": "诡计被识破，或者选择了坦白和归还。"}, {"name": "宝剑八", "en": "Eight of Swords", "kw": "束缚·限制·无力感", "desc": "感觉被禁闭和限制，但很多束缚其实是自我认知造成的，看看脚下，其实可以移动。", "rev_kw": "自由·解脱·清醒", "rev_desc": "突破了精神的枷锁，获得了全新的自由。"}, {"name": "宝剑九", "en": "Nine of Swords", "kw": "焦虑·噩梦·恐惧", "desc": "深夜的噩梦和极度的焦虑，让你彻夜难眠。事情可能没有你想的那么糟。", "rev_kw": "希望·走出恐惧·正视", "rev_desc": "终于开始正视恐惧，噩梦逐渐消散。"}, {"name": "宝剑十", "en": "Ten of Swords", "kw": "终结·谷底·绝处逢生", "desc": "最黑暗的时刻，被彻底击倒。但暴风雨已经过去，黎明就在眼前。", "rev_kw": "东山再起·坚强·幸存", "rev_desc": "克服了最后的苦难，正在艰难地站起来。"}, {"name": "宝剑侍从", "en": "Page of Swords", "kw": "好奇心·收集信息·警觉", "desc": "一个消息灵通者，正在收集和分析信息。保持警惕。", "rev_kw": "谣言·窥探·缺乏计划", "rev_desc": "散播未经证实的消息，或过度窥探隐私。"}, {"name": "宝剑骑士", "en": "Knight of Swords", "kw": "急进·冲撞·决心", "desc": "不顾一切地冲向目标，速度快但可能因为准备不足而至翻车。", "rev_kw": "鲁莽·混乱·挫败", "rev_desc": "横冲直撞导致惨痛的失败，全然听不进去别人的话。"}, {"name": "宝剑王后", "en": "Queen of Swords", "kw": "独立·理智·界限清晰", "desc": "理性、独立、做事滴水不漏。她能清晰地感知事物本质且不容侵犯。", "rev_kw": "冷酷·挑剔·恶意", "rev_desc": "过于冷酷无情，或者带有恶意的挑刺。"}, {"name": "宝剑国王", "en": "King of Swords", "kw": "智慧·纪律·权威", "desc": "凭借极强的逻辑和理性来建立秩序和保护规则。", "rev_kw": "暴君·操纵·冷漠", "rev_desc": "滥用权力，利用智识去操纵和欺压弱者。"}, {"name": "星币王牌", "en": "Ace of Pentacles", "kw": "机会·财富·新事业", "desc": "一个坚实的机会抓在你手中，它代表稳健的财富和新事业的开始。", "rev_kw": "错失机会·财务问题·浪费", "rev_desc": "一个宝贵的机会被你忽略了，或者财务开始紧张。"}, {"name": "星币二", "en": "Two of Pentacles", "kw": "平衡·灵活·适应", "desc": "在两个事务间寻找平衡，你拥有足够的灵活性去驾驭。", "rev_kw": "失衡·压力·混乱", "rev_desc": "难以兼顾多项事务，导致手忙脚乱。"}, {"name": "星币三", "en": "Three of Pentacles", "kw": "团队合作·技能·执行", "desc": "团队在有条不紊地协作，共同完成一项高质量的工程。", "rev_kw": "缺乏合作·质量低下·各自为政", "rev_desc": "团队各自为政导致效率低下，质量标准不达标。"}, {"name": "星币四", "en": "Four of Pentacles", "kw": "守财·控制·安全感", "desc": "死死抓住手中的财富，既有可能是吝啬，也可能是对失序的恐惧。", "rev_kw": "放手·慷慨·财务松动", "rev_desc": "放手控制或用金钱帮助他人，虽然有些许的压迫感。"}, {"name": "星币五", "en": "Five of Pentacles", "kw": "困窘·孤独·匮乏", "desc": "两人在严寒中艰难行走，忽略了不远处温暖的窗口和无私的帮助。", "rev_kw": "寻求帮助·走出困境", "rev_desc": "终于鼓起勇气寻求帮助，或者发现了身边的援手。"}, {"name": "星币六", "en": "Six of Pentacles", "kw": "给予·接受·公平", "desc": "财富的公平分配，乐于助人或接受馈赠，有着明确的界限。", "rev_kw": "剥削·施舍·不平等", "rev_desc": "用施舍控制他人，收获的是贪婪而非感恩。"}, {"name": "星币七", "en": "Seven of Pentacles", "kw": "审视·耐心·等待", "desc": "你的付出正在结果。停下来审视看看是否需要调整方向。", "rev_kw": "失望·半途而废·成果不佳", "rev_desc": "没有耐心等到收获就半途而废了，或成果不尽如人意。"}, {"name": "星币八", "en": "Eight of Pentacles", "kw": "专注·勤奋·技艺", "desc": "日复一日地精雕细琢，投身于技艺的提升，这是一段磨砺内功的时光。", "rev_kw": "不专心·敷衍·平庸", "rev_desc": "心不在焉导致工作质量堪忧，只想得过且过。"}, {"name": "星币九", "en": "Nine of Pentacles", "kw": "独立·优雅·成就", "desc": "你凭借自己的努力打造了一片典雅精致的花园，享受着独立和平静的生活。", "rev_kw": "依赖·肤浅·短暂", "rev_desc": "过于依赖他人或外在条件，没有真正掌握自主权。"}, {"name": "星币十", "en": "Ten of Pentacles", "kw": "传承·富足·长久", "desc": "家族的繁荣与稳定的长久传承，不仅是物质上，还有关系和精神上的富足。", "rev_kw": "财务危机·家族矛盾·败家", "rev_desc": "家族传承不把稳，甚至存在分崩离析或衰落的风险。"}, {"name": "星币侍从", "en": "Page of Pentacles", "kw": "学习·实践·踏实", "desc": "踏实地学习和钻研，掌握一项新的技能。", "rev_kw": "好高骛远·粗心·无聊", "rev_desc": "不愿意从最基础的做起，眼高手低。"}, {"name": "星币骑士", "en": "Knight of Pentacles", "kw": "坚持·责任·务实", "desc": "全宇宙最稳重的实干者，他也许很慢但从未停歇，终会抵达终点。", "rev_kw": "僵化·顽固·停滞", "rev_desc": "过于死板不知道变通，导致项目彻底停滞。"}, {"name": "星币王后", "en": "Queen of Pentacles", "kw": "滋养·务实·生活家", "desc": "生活的专家，知道如何让周围的世界茁壮成长，并享受美的事物。", "rev_kw": "依赖·控制·忽视", "rev_desc": "对物质的依赖太重，或者为了控制而忽视了真实的感受。"}, {"name": "星币国王", "en": "King of Pentacles", "kw": "巅峰·财富·可靠", "desc": "凭借惊人的务实和稳健，他已坐拥整个商业命脉，富甲一方。", "rev_kw": "破产·贪婪·腐败", "rev_desc": "因贪财或监管不严导致了极大的财务风险。"}];
+var LENORMAND_CARDS=[{"symbol": "♞", "name": "骑士", "kw": "动态·到来·消息", "desc": "一个重要的动态或人物即将闯入你的生活，改变现状。"}, {"symbol": "🍀", "name": "幸运草", "kw": "好运·偶然·转机", "desc": "意料之外的幸运降临，抓住它，机会稍纵即逝。"}, {"symbol": "🚢", "name": "船", "kw": "旅行·远行·距离", "desc": "开启一场长途旅行或异地事务，远离舒适区。"}, {"symbol": "🏠", "name": "房子", "kw": "家庭·安全·隐私", "desc": "回归内心的家园，家庭的温暖和安全的庇护。"}, {"symbol": "🌳", "name": "树", "kw": "健康·成长·根基", "desc": "生生不息的力量，身体的康健和长远的成长。"}, {"symbol": "☁", "name": "云", "kw": "困惑·迷雾·不确定", "desc": "前方视线模糊，不要做重大决定。唯一确定的就是不确定。"}, {"symbol": "🐍", "name": "蛇", "kw": "欺骗·诱惑·复杂", "desc": "美丽而危险，引诱你偏离正路的陷阱，提防身边的人。"}, {"symbol": "⚰", "name": "棺材", "kw": "结束·终结·暂停", "desc": "一个篇章彻底终结，埋藏过去，需要时间消化和过渡。"}, {"symbol": "🎁", "name": "花束", "kw": "礼物·感谢·欣赏", "desc": "来自他人的赞美和馈赠，美好的心意。"}, {"symbol": "🗡", "name": "镰刀", "kw": "切割·危险·抉择", "desc": "快刀斩乱麻，必须做出果决的切割才能止损。"}, {"symbol": "⚔", "name": "鞭子", "kw": "争执·行动·重复", "desc": "重复的争执或激进的行动，有点痛但也能鞭策前进。"}, {"symbol": "🕊", "name": "鸟", "kw": "沟通·闲聊·流动", "desc": "各种消息满天飞，可能正在热烈讨论或需要沟通。"}, {"symbol": "👶", "name": "小孩", "kw": "开始·天真·新事物", "desc": "赤子之心，一个新的开始和简单的快乐。"}, {"symbol": "🦊", "name": "狐狸", "kw": "狡猾·计谋·隐藏", "desc": "聪明反被聪明误。保持警惕，可能有人在隐瞒真相。"}, {"symbol": "🐻", "name": "熊", "kw": "力量·保护·领导", "desc": "强大的力量和傲然的保护欲。贵人（往往是长辈）相助。"}, {"symbol": "★", "name": "星星", "kw": "希望·指引·愿望", "desc": "方向清晰，愿望即将实现。星星引领着你穿越未知的黑暗。"}, {"symbol": "🪶", "name": "鹳鸟", "kw": "变化·成长·迁移", "desc": "即将发生重要的变化或成长，可能是环境的转变或人生阶段的跨越。"}, {"symbol": "🐕", "name": "狗", "kw": "忠诚·友谊·守护", "desc": "忠诚的朋友和伙伴，无私的陪伴和支持。"}, {"symbol": "🏰", "name": "塔", "kw": "权威·孤立·机构", "desc": "高高在上的权威，但也可能代表孤立无援。"}, {"symbol": "🏡", "name": "花园", "kw": "社交·聚会·公众", "desc": "在人群中获得快乐和认可，社交场合带来新的机遇。"}, {"symbol": "🗻", "name": "山", "kw": "障碍·挑战·阻力", "desc": "巨大的障碍横在面前，需要耐心和毅力才能跨越。"}, {"symbol": "🛣", "name": "道路", "kw": "选择·决定·犹豫", "desc": "面临人生的分岔口，选择一条路必将舍弃另一条。"}, {"symbol": "🐁", "name": "老鼠", "kw": "损耗·焦虑·腐蚀", "desc": "资源正在被暗暗腐蚀，可能是一些不起眼的小麻烦。"}, {"symbol": "♥", "name": "心", "kw": "爱情·和好·情感", "desc": "一切形式的爱与宽恕。感情上的升温或重归于好。"}, {"symbol": "💍", "name": "戒指", "kw": "承诺·结合·契约", "desc": "一生的承诺或一个不可违背的约定。"}, {"symbol": "📖", "name": "书", "kw": "秘密·知识·等待", "desc": "还未揭晓的秘密，需要更多的学习和等待。"}, {"symbol": "✉", "name": "信件", "kw": "消息·文件·通信", "desc": "一封重要的信件或消息即将到来，可能来自远处或带来新的信息。"}, {"symbol": "🧑", "name": "男人", "kw": "男性·关系·外在", "desc": "与你相关的男性人物，可能代表伴侣、朋友或工作关系。"}, {"symbol": "👩", "name": "女人", "kw": "女性·关系·内在", "desc": "与你相关的女性人物，可能代表伴侣、朋友或内心的女性特质。"}, {"symbol": "🌷", "name": "百合花", "kw": "纯洁·美德·宁静", "desc": "高尚的情操与宁静致远的态度，自净而高贵。"}, {"symbol": "☀", "name": "太阳", "kw": "成功·胜利·光明", "desc": "阳光普照，所有的阴霾都将散去。这是一张代表成功与积极能量的卡。"}, {"symbol": "☽", "name": "月亮", "kw": "荣誉·认可·心灵", "desc": "夜深人静时，内心深处发出荣光。被认可和被赞美的时刻。"}, {"symbol": "🗝", "name": "钥匙", "kw": "解决方案·开启·成功", "desc": "问题迎刃而解，关键的洞见打开了新的大门。"}, {"symbol": "🐟", "name": "鱼", "kw": "财富·生意·流通", "desc": "金鳞入水，财富正在活跃地流通。"}, {"symbol": "⚓", "name": "锚", "kw": "稳定·安全·停泊", "desc": "漂泊之后终于有了停靠的港湾，你找到了那份安稳和安心。"}, {"symbol": "✝", "name": "十字架", "kw": "宿命·磨难·考验", "desc": "无法抗拒的信念，必须背负的十字架和因果循环。"}];
+
+
+
+// ---------- State ----------
+var contacts=[],groups=[],me={name:'我',avatar:'',wxid:'',momentsCover:''},cid=null,rtimers={},typingStates={},currentProfileContactId=null,emotionStreak=0;
+var cardPrivateContacts=[];
+var _cardPrivateContactsReady=false; // ★ 标记 IndexedDB 恢复是否完成，防止自动检测竞态误判
+
+function loadCardPrivateContacts(){
+  return new Promise(function(resolve){
+    try{
+      var stored=localStorage.getItem('ml2_card_private_contacts');
+      if(stored){
+        try{cardPrivateContacts=JSON.parse(stored);}catch(e){cardPrivateContacts=[];}
+      }
+    }catch(e){
+      cardPrivateContacts=[];
+    }
+    // 异步从 IndexedDB 恢复并合并，防止 localStorage 丢失导致绑定数据为空
+    // ★ 修复：以 localStorage 为最新（保存是同步成功的），IndexedDB 只补充缺失项，
+    // 避免 IndexedDB 旧数据（未绑定）覆盖 localStorage 新绑定
+    var _done=function(){_cardPrivateContactsReady=true;resolve();};
+    if(window.localforage){
+      window.localforage.getItem('ml2_card_private_contacts').then(function(dbVal){
+        try{
+          if(dbVal){
+            var dbData=typeof dbVal==='string'?JSON.parse(dbVal):dbVal;
+            if(Array.isArray(dbData)&&dbData.length>0){
+              // 以 localStorage 为准合并：localStorage 已有 id 保留（含最新绑定），IndexedDB 只补充缺失
+              var merged=cardPrivateContacts.slice();
+              var seen={};
+              merged.forEach(function(pc){if(pc&&pc.id)seen[pc.id]=true;});
+              var added=false;
+              dbData.forEach(function(pc){
+                if(pc&&pc.id&&!seen[pc.id]){seen[pc.id]=true;merged.push(pc);added=true;}
+              });
+              if(merged.length!==cardPrivateContacts.length){
+                cardPrivateContacts=merged;
+                try{localStorage.setItem('ml2_card_private_contacts',JSON.stringify(cardPrivateContacts));}catch(e){}
+              }
+              if(added)console.log('loadCardPrivateContacts: merged',added,'from IndexedDB');
+            }
+          }
+        }catch(e){console.warn('loadCardPrivateContacts: IndexedDB merge failed',e);}
+        _done();
+      }).catch(function(e){
+        console.warn('loadCardPrivateContacts: IndexedDB read failed',e);
+        _done();
+      });
+    }else{
+      _done();
+    }
+  });
+}
+
+function saveCardPrivateContacts(){
+  try{
+    var serialized=JSON.stringify(cardPrivateContacts);
+    localStorage.setItem('ml2_card_private_contacts',serialized);
+  }catch(e){}
+  // 同步写入 IndexedDB，确保数据持久化不丢失；失败时重试一次
+  if(window.localforage){
+    window.localforage.setItem('ml2_card_private_contacts',serialized).then(function(){
+      try{localStorage.setItem('ml2_card_private_contacts_synced',String(Date.now()));}catch(e){}
+    }).catch(function(e){
+      console.warn('saveCardPrivateContacts: IndexedDB save failed, retrying',e);
+      setTimeout(function(){
+        if(window.localforage){window.localforage.setItem('ml2_card_private_contacts',serialized).catch(function(){});}
+      },500);
+    });
+  }
+}
+var navDisplayStates={};
+var FIXED_CONTACTS=[];
+var DEF_CARDS=[];
+
+
+
+

@@ -1,0 +1,79 @@
+
+<!-- Add Custom Song Modal -->
+<div class="overlay" id="ov-star-add-custom-song">
+  <div class="sheet" style="max-width:420px;">
+    <div class="sh"><h3>🎵 添加自定义歌曲</h3><button class="btn-close" onclick="closeAddCustomSongModal()">✕</button></div>
+    <div class="sb" style="padding:16px;">
+      <input id="custom-song-title" placeholder="歌名" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:12px;box-sizing:border-box;">
+      <input id="custom-song-artist" placeholder="歌手" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:12px;box-sizing:border-box;">
+      <input id="custom-song-url" placeholder="粘贴 mp3/m4a 直链" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:16px;box-sizing:border-box;">
+      <div style="display:flex;gap:8px;">
+        <button onclick="closeAddCustomSongModal()" style="flex:1;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--c2);color:var(--txt);font-size:14px;cursor:pointer;">取消</button>
+        <button onclick="addCustomSong()" style="flex:1;padding:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;">确认添加</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Star Music URL Modal -->
+<div class="overlay" id="ov-star-add-music-url">
+  <div class="sheet" style="max-width:420px;">
+    <div class="sh"><h3>🔗 添加链接音乐</h3><button class="btn-close" onclick="closeAddStarMusicUrlModal()">✕</button></div>
+    <div class="sb" style="padding:16px;">
+      <input id="star-music-url-name" placeholder="歌曲名称" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box;">
+      <input id="star-music-url-artist" placeholder="歌手" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box;">
+      <input id="star-music-url-link" placeholder="网易云ID（如 2064961530）" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:6px;box-sizing:border-box;">
+      <div style="font-size:11px;color:var(--txt3);margin-bottom:16px;line-height:1.5;">💡 输入网易云歌曲数字ID可自动识别添加歌曲</div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="closeAddStarMusicUrlModal()" style="flex:1;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--c2);color:var(--txt);font-size:14px;cursor:pointer;">取消</button>
+        <button onclick="addStarMusicByUrl()" style="flex:1;padding:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;">确认添加</button>
+      </div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);text-align:center;">
+        <button onclick="openBatchImportModal()" style="padding:8px 16px;border:1px dashed var(--accent);border-radius:10px;background:transparent;color:var(--accent);font-size:13px;cursor:pointer;">📋 批量导入</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Batch Import Star Music Modal -->
+<div class="overlay" id="ov-star-batch-import">
+  <div class="sheet" style="max-width:480px;">
+    <div class="sh"><h3>📋 批量导入音乐</h3><button class="btn-close" onclick="closeBatchImportModal()">✕</button></div>
+    <div class="sb" style="padding:16px;">
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button id="batch-tab-id" onclick="switchBatchImportMode('id')" style="flex:1;padding:10px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:13px;cursor:pointer;">网易云ID导入</button>
+        <button id="batch-tab-format" onclick="switchBatchImportMode('format')" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--c2);color:var(--txt);font-size:13px;cursor:pointer;">格式导入</button>
+      </div>
+      
+      <div id="batch-id-mode">
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.6;">
+          每行一个网易云歌曲ID或链接，自动识别歌名歌手：<br>
+          <span style="color:#d4a850;">可选格式：ID 歌曲名称（空格分隔，跳过自动识别）</span><br>
+          <span style="color:var(--txt3);">示例：</span><br>
+          <span style="color:var(--txt3);">2064961530（自动识别）</span><br>
+          <span style="color:var(--txt3);">27538343 Baby（手动命名）</span><br>
+          <span style="color:var(--txt3);">http://music.163.com/song/media/outer/url?id=2064961530.mp3</span>
+        </div>
+        <textarea id="star-music-batch-id" placeholder="2064961530&#10;27538343 Baby&#10;http://music.163.com/song/media/outer/url?id=28815250.mp3" style="width:100%;height:240px;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;box-sizing:border-box;resize:vertical;"></textarea>
+      </div>
+      
+      <div id="batch-format-mode" style="display:none;">
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.6;">
+          按格式粘贴歌曲信息，每首歌空一行分隔：<br>
+          <span style="color:var(--accent);">格式：</span><br>
+          歌曲名称：xxx<br>
+          歌手：xxx<br>
+          音乐直链URL：xxx
+        </div>
+        <textarea id="star-music-batch-text" placeholder="歌曲名称：Baby&#10;歌手：EXO-K&#10;音乐直链URL：http://music.163.com/song/media/outer/url?id=27538343.mp3&#10;&#10;歌曲名称：歌名2&#10;歌手：歌手2&#10;音乐直链URL：http://example.com/music2.mp3" style="width:100%;height:240px;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:13px;font-family:monospace;box-sizing:border-box;resize:vertical;"></textarea>
+      </div>
+      
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button onclick="closeBatchImportModal()" style="flex:1;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--c2);color:var(--txt);font-size:14px;cursor:pointer;">取消</button>
+        <button id="batch-import-btn" onclick="batchImportById()" style="flex:1;padding:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;">开始导入</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body></html>
